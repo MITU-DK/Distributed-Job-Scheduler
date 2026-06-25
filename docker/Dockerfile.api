@@ -1,0 +1,27 @@
+# Stage 1 — Build
+# Use the full Go image to compile. Result: a static binary.
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+
+# Copy dependency files first. Docker caches this layer separately.
+# If only Go source changes (not go.mod/go.sum), this layer is reused → faster builds.
+COPY go.mod go.sum ./
+RUN go mod download 
+
+# Copy the rest of the source and build.
+# CGO_ENABLED=0 → fully static binary (no C library dependencies).
+# -ldflags="-s -w" → strips symbol table and DWARF debug info (~30% smaller binary).
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /api ./cmd/api
+
+# Stage 2 — Runtime
+# Minimal image: no Go toolchain, no source, just the compiled binary.
+# Expected final image size: ~12-15MB.
+FROM alpine:3.19
+# ca-certificates is required for the WebhookExecutor to make HTTPS calls.
+# Without it, TLS verification fails at runtime. This is a common gotcha.
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY --from=builder /api .
+EXPOSE 8080
+CMD ["./api"]

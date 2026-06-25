@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* Base font — applied globally via Tailwind's base layer */
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}

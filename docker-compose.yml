@@ -1,0 +1,61 @@
+services:
+  # Redis
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "6379:6379"
+
+  # API Server
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Inside Docker, 'redis' resolves to the redis container via Docker's default network.
+      # .env keeps localhost:6379 so local dev still works without Docker.
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8080:8080"
+    restart: on-failure
+
+  # Worker 
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Same override as api — workers also need to reach the redis container.
+      REDIS_ADDR: redis:6379
+    restart: on-failure
+
+  # Frontend (React + NGINX) 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+    restart: on-failure
+
+volumes:
+  redis-data:
