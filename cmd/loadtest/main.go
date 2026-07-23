@@ -50,7 +50,7 @@ func main() {
 	fmt.Printf("🎯 Target: %d jobs using the 'sleep' executor (100ms fixed duration each)\n", count)
 
 	// 1. Flush Redis
-	rdb, err := store.NewClient(cfg)
+	rdb, err := store.NewRedisClient(cfg)
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}

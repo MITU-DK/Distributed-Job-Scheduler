@@ -1,9 +1,5 @@
-// Server owns the http.Server, the router (ServeMux), and graceful shutdown.
-// It knows nothing about business logic living in handlers.go.
-// Dependency injection pattern:
-//
-//	All handlers receive their dependencies (config,Redis client) through the
-//	Handler struct, not through package-level globals. This makes the code testable and avoids hidden coupling.
+// Server owns the http.Server, the router (ServeMux), and graceful shutdown. No bussines logic.
+// handlers receive dependencies (config,Redis client) through Handler struct, not through package-level globals.
 package api
 
 import (
@@ -24,7 +20,7 @@ type Server struct {
 }
 
 // New builds the Server, wires all routes, and wraps them in middleware. & Call Serve() to actually start listening.
-func New(cfg *config.Config, rdb *redis.Client) *Server {
+func NewServer(cfg *config.Config, rdb *redis.Client) *Server {
 	h := &Handler{rdb: rdb, cfg: cfg}
 	m := &Metrics{rdb: rdb}
 
@@ -44,13 +40,7 @@ func New(cfg *config.Config, rdb *redis.Client) *Server {
 	// Dashboard routes
 	mux.HandleFunc("GET /dashboard/jobs/dead", h.handleDeadJobs)
 
-	// Wrap the entire mux in the middleware chain.
-	// Order (outermost to innermost): cors → requestID → logger → panicRecovery → mux
-	// Why this order?
-	//   cors must be outermost to catch OPTIONS requests early.
-	//   requestID injects the ID first so every subsequent middleware can log it.
-	//   logger records timing, so it must wrap the actual handler.
-	//   panicRecovery is innermost — it catches panics from handlers.
+	// middleware chain.(outermost to innermost)
 	chain := cors(cfg)(requestID(logger(panicRecovery(mux))))
 
 	return &Server{
@@ -66,8 +56,6 @@ func New(cfg *config.Config, rdb *redis.Client) *Server {
 }
 
 // Serve starts the HTTP server and blocks until ctx is cancelled.
-// On cancellation, it initiates a graceful shutdown — waits up to
-// GracefulShutdownTimeoutSeconds for in-flight requests to complete.
 func (s *Server) Serve(ctx context.Context) error {
 	// Run the server in a goroutine so we can listen for ctx cancellation.
 	errCh := make(chan error, 1)

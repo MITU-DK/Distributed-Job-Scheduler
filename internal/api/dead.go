@@ -1,11 +1,6 @@
-// Returns a paginated list of job IDs from the Dead-Letter Queue (jobs:dead),
-// enriched with their full metadata (status, name, priority, error, timestamps).
-//
-// The Dead-Letter Queue is a Redis List. Jobs land here after exhausting all retries.
-// This endpoint lets the dashboard display a "Dead Jobs" table so an operator can
-// manually inspect which jobs failed, why, and potentially trigger a retry.
-//
-// Response shape:
+// Returns a paginated list of job IDs from the Dead-Letter Queue (jobs:dead), alongwith full metadata (status, name, priority, error, timestamps).
+
+// Response shape: after all retry failed.
 //
 //	{
 //	  "total": 42,
@@ -27,13 +22,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// DeadJobsResponse is the JSON payload returned by GET /jobs/dead.
+// GET /jobs/dead.
 type DeadJobsResponse struct {
 	Total int64     `json:"total"` // Total number of dead jobs in the queue.
 	Jobs  []DeadJob `json:"jobs"`  // The page of jobs returned.
 }
 
-// DeadJob is a flat summary of a dead job, assembled from its Redis Hash fields.
 type DeadJob struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -45,15 +39,9 @@ type DeadJob struct {
 	EnqueuedAt string `json:"enqueued_at"`
 }
 
-// handleDeadJobs handles GET /jobs/dead.
-//
-// Query parameters:
-//   - limit  (default: 50)  — max number of dead jobs to return per page.
-//   - offset (default: 0)   — number of dead jobs to skip (for pagination).
+// Query parameters:limit(default: 50),offset (default: 0)
 func (h *Handler) handleDeadJobs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse optional pagination query params.
 	limit := parseIntParam(r, "limit", 50)
 	offset := parseIntParam(r, "offset", 0)
 
@@ -73,7 +61,7 @@ func (h *Handler) handleDeadJobs(w http.ResponseWriter, r *http.Request) {
 // fetchDeadJobs reads a page of job IDs from the jobs:dead list,then fetches each job's metadata hash in a single pipeline.
 func fetchDeadJobs(ctx context.Context, rdb *redis.Client, offset, limit int64) (*DeadJobsResponse, error) {
 
-	total, err := rdb.LLen(ctx, queue.KeyDead).Result() // LLEN gives us the total count without reading the whole list.
+	total, err := rdb.LLen(ctx, queue.KeyDead).Result() // LLEN--> total count without reading the whole list.
 	if err != nil {
 		return nil, err
 	}
@@ -82,15 +70,12 @@ func fetchDeadJobs(ctx context.Context, rdb *redis.Client, offset, limit int64) 
 		return &DeadJobsResponse{Total: 0, Jobs: []DeadJob{}}, nil
 	}
 
-	// LRANGE start stop — Redis is 0-indexed, stop is inclusive.
-	// offset=0, limit=50 → LRANGE 0 49 → returns first 50 elements.
-	stop := offset + limit - 1
+	stop := offset + limit - 1 //(Redis is 0-indexed, stop is inclusive.)
 	ids, err := rdb.LRange(ctx, queue.KeyDead, offset, stop).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	// Fetch all metadata hashes in one pipeline round-trip.
 	pipe := rdb.Pipeline()
 	cmds := make([]*redis.MapStringStringCmd, len(ids))
 
@@ -129,8 +114,7 @@ func fetchDeadJobs(ctx context.Context, rdb *redis.Client, offset, limit int64) 
 	return &DeadJobsResponse{Total: total, Jobs: jobs}, nil
 }
 
-// parseIntParam reads an integer query parameter by name.
-// If the parameter is missing or invalid, it returns the provided default value.
+// if is missing or invalid,return provided default value.
 func parseIntParam(r *http.Request, name string, defaultVal int) int {
 	raw := r.URL.Query().Get(name)
 	if raw == "" {

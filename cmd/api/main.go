@@ -1,8 +1,6 @@
-// cmd/api/main.go — API server entry point.
-//
 // Responsibilities:
 //  1. Load configuration (fail fast if invalid)
-//  2. Connect to Redis (fail fast if unreachable)
+//  2. Connect to Redis (fail fast if not)
 //  3. Wire dependencies together (Server, Handler, Metrics)
 //  4. Start the HTTP server
 //  5. Handle graceful shutdown on SIGTERM / SIGINT
@@ -36,7 +34,7 @@ func main() {
 	)
 
 	// 3. Connect to Redis.
-	rdb, err := store.NewClient(cfg)
+	rdb, err := store.NewRedisClient(cfg)
 	if err != nil {
 		slog.Error("redis_connect_failed", "error", err)
 		os.Exit(1)
@@ -44,12 +42,11 @@ func main() {
 	defer rdb.Close()
 	slog.Info("redis_connected", "addr", cfg.RedisAddr)
 
-	// 4. Build the HTTP server (routes + middleware wired inside api.New).
-	srv := api.New(cfg, rdb)
+	// 4. Build the HTTP server (routes + middleware wired inside api.NewServer).
+	srv := api.NewServer(cfg, rdb)
 
 	// 5. Graceful shutdown:
-	//    - Create a cancellable root context.
-	//    - On SIGTERM/SIGINT, call cancel() which signals srv.Serve() to start shutdown.
+	// Create a cancellable root context,on SIGTERM/SIGINT, call cancel() which signals srv.Serve() to start shutdown.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

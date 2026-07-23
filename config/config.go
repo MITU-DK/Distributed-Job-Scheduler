@@ -1,7 +1,6 @@
-// Package config loads all application configuration from environment variables.
-// Every configurable value lives here. No other file should call os.Getenv.
+// Every configurable value lives here. No other file  call os.Getenv.
 // If configuration is invalid, Load() returns an error and main() calls log.Fatal.
-// This is the "fail-fast" pattern: a misconfigured service must not start silently.
+// The "fail-fast" pattern: a misconfigured service must not start silently.
 package config
 
 import (
@@ -109,15 +108,16 @@ func validate(cfg *Config) error {
 
 // helpers
 func getEnv(key, defaultVal string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+	v := os.Getenv(key)
+	if v == "" { //if not passed through terminal or docker compose,use default value
+		return defaultVal
 	}
-	return defaultVal
+	return v
 }
 
 func getEnvInt(key string, defaultVal int) int {
 	v := os.Getenv(key) //read from os environment variables,exist only if passed thorugh terminal or docker compose.
-	if v == "" {        //if not passed through terminal or docker compose,use default value
+	if v == "" {
 		return defaultVal
 	}
 	n, err := strconv.Atoi(v) //terminal always passes strings,so convert them to int using strconv.Atoi

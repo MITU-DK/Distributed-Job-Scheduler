@@ -1,6 +1,4 @@
-// Package job defines the Job struct and its serialisation helpers for Redis.
-// All fields use Unix timestamps (int64) instead of time.Time because
-// time.Time does not serialise cleanly to/from Redis hash fields.
+// Job struct & serialisation  & deserialzation helpers for Redis.
 package job
 
 import (
@@ -9,58 +7,25 @@ import (
 	"strconv"
 )
 
-// Job is the core data object of the scheduler.
-// Every field is documented with its design rationale below.
 type Job struct {
-	// ── Identity
-	ID string `json:"id"` // UUID v4 -> No sequential IDs, distributed systems safe, unique
-
-	// String (not enum) so new job types can be added without changing the core.
-	// The worker's executor registry is a map[string]Executor — fully extensible.
-	Name string `json:"name"` // executor type: "send_email", "run_backup", "process_payment", etc
-
-	// Scheduling
-	Priority int `json:"priority"` // Priority: 1=highest, 2=medium, 3=lowest.
-
-	// ScheduledAt is Unix timestamp (seconds) for when the job should run.
-	// 0 means "run immediately" — the job goes directly to the priority queue.
-	// If ScheduledAt is in the past, it is treated as 0 (run immediately).
-	ScheduledAt int64 `json:"scheduled_at"`
-
-	// ── Execution parameters
-
-	// Payload is arbitrary JSON for the executor to deserialise.
-	// json.RawMessage stores pre-serialised JSON without double-encoding.
-	// The scheduler/queue never deserialises payload — only the executor does.
-	// This avoids interface{} / map[string]interface{} everywhere.
-	Payload json.RawMessage `json:"payload"` //Raw JSON stored as bytes without parsing it.
-	//The scheduler does not care what's inside the payload. It just stores and forwards it.
-
-	// MaxRetries is the per-job maximum retry count.
-	// 0 = never retry (use for financial transactions or non-idempotent jobs).
-	// The global default from config is used when the API caller does not specify.
-	MaxRetries int `json:"max_retries"`
-
-	// Status tracking
-	Status     Status `json:"status"`
-	RetryCount int    `json:"retry_count"` // Incremented BEFORE re-enqueue (see retry.go)
-	LastError  string `json:"last_error"`  // Error message from last failed attempt
-	WorkerID   string `json:"worker_id"`   // Set to worker UUID when IN_PROGRESS
-
-	// Timestamps (all Unix epoch seconds, int64)
-	// Why int64, not time.Time? becoz time.Time does not store cleanly in Redis hash fields.
-	// Unix seconds are a single integer — trivial to store, compare, and serialise.
-	EnqueuedAt  int64 `json:"enqueued_at"`
-	StartedAt   int64 `json:"started_at"`
-	CompletedAt int64 `json:"completed_at"`
+	ID          string          `json:"id"`           // UUID v4
+	Name        string          `json:"name"`         // executor type: "send_email", "run_backup", "process_payment", etc
+	Priority    int             `json:"priority"`     // Priority: 1=highest, 2=medium, 3=lowest.
+	ScheduledAt int64           `json:"scheduled_at"` //past or 0 run immeditely.
+	Payload     json.RawMessage `json:"payload"`      //Raw JSON stored as bytes without parsing it,for the executor to deserialise.
+	MaxRetries  int             `json:"max_retries"`  // 0 = never retry
+	Status      Status          `json:"status"`
+	RetryCount  int             `json:"retry_count"`
+	LastError   string          `json:"last_error"`  // Error message from last failed attempt
+	WorkerID    string          `json:"worker_id"`   // Set to worker UUID when IN_PROGRESS
+	EnqueuedAt  int64           `json:"enqueued_at"` //(all Unix epoch seconds, int64)
+	StartedAt   int64           `json:"started_at"`
+	CompletedAt int64           `json:"completed_at"`
 }
 
-//Redis serialisation
-// Redis hashes store all values as strings. We convert every field explicitly.
-// Using map[string]interface{} lets go-redis handle the string conversion.
+//Redis serialisation as strings, convert every field explicitly.
 
-// ToHash converts a Job into the map format expected by Redis HSET.
-// Every field maps to the same name as its JSON tag (snake_case).
+// converts a Job into the map format expected by Redis HSET.
 func ToHash(j *Job) map[string]interface{} {
 	return map[string]interface{}{
 		"id":           j.ID,
@@ -79,11 +44,8 @@ func ToHash(j *Job) map[string]interface{} {
 	}
 }
 
-// FromHash parses a Redis HGETALL result (map[string]string) back into a Job.
-// Returns a descriptive error for any malformed field.
-// An unknown status string is an error — we must not silently default.
+// HGETALL result (map[string]string) back into a Job.
 func FromHash(m map[string]string) (*Job, error) {
-
 	j := &Job{}
 	var err error
 

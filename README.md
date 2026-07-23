@@ -111,8 +111,8 @@ Throughput scales near-linearly because the `SleepExecutor` is pure IO-bound (no
 
 ```bash
 # Clone and start everything in one command
-git clone https://github.com/mitudk/chronos
-cd chronos
+git clone https://github.com/MITU-DK/Distributed-Job-Scheduler
+cd Distributed-Job-Scheduler
 docker compose up --build
 ```
 

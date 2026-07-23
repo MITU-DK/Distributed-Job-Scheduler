@@ -1,4 +1,3 @@
-// Package api — HTTP helpers.
 package api
 
 import (
@@ -8,12 +7,10 @@ import (
 	"net/http"
 )
 
-// errorResponse is the structured error body returned for 4xx errors.
-// Structured errors let API clients handle specific error codes programmatically
-// instead of parsing human-readable strings.
+// structured error body return for 4xx errors.
 type errorResponse struct {
-	Error   string `json:"error"`           // machine-readable code: "invalid_priority"
-	Message string `json:"message"`         // human-readable description
+	Error   string `json:"error"`
+	Message string `json:"message"`         // for user message
 	Field   string `json:"field,omitempty"` // which field caused the error, if applicable
 }
 
@@ -26,18 +23,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-// writeError writes a structured errorResponse with the given status code.
 func writeError(w http.ResponseWriter, status int, code, message, field string) {
 	writeJSON(w, status, errorResponse{Error: code, Message: message, Field: field})
 }
 
-// decodeBody decodes the JSON request body into dst.
-// Returns false (and writes an appropriate error) if decoding fails.
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if r.Header.Get("Content-Type") != "application/json" {
-		writeError(w, http.StatusUnsupportedMediaType,
-			"invalid_content_type",
-			"Content-Type must be application/json", "")
+		writeError(w, http.StatusUnsupportedMediaType, "invalid_content_type", "Content-Type must be application/json", "")
 		return false
 	}
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
@@ -47,8 +39,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// isValidationError returns true if the error came from the job validation layer.
-// This is a lightweight check to distinguish user errors (400) from system errors (500).
+// distinguish user (400) from system errors (500).
 func isValidationError(err error) bool {
 	// Errors from queue.validateJob are wrapped with "enqueue validation: ".
 	return errors.Is(err, err) && len(err.Error()) > 0 &&

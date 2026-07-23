@@ -1,13 +1,11 @@
-// Handler is a struct that holds dependencies (Redis, config) and exposes methods for each route.
-// This is Go's idiomatic alternative to global variables.
-
+// Handler struct holding dependencies (Redis, config) and exposing methods for each route, instead global variables.
 // Endpoints:
 //
-//	POST /jobs            → handleEnqueue     (immediate job)
-//	POST /jobs/schedule   → handleSchedule    (future-scheduled job)
-//	GET  /jobs/{id}       → handleGetJob      (job status + metadata)
-//	GET  /jobs/{id}/history → handleGetHistory (status transition log)
-//	POST /jobs/{id}/retry → handleRetry       (re-enqueue a FAILED/DEAD job)
+//	POST /jobs             handleEnqueue     (immediate job)
+//	POST /jobs/schedule   -> handleSchedule    (future-scheduled job)
+//	GET  /jobs/{id}       -> handleGetJob      (job status + metadata)
+//	GET  /jobs/{id}/history -> handleGetHistory (status transition log)
+//	POST /jobs/{id}/retry -> handleRetry       (re-enqueue a FAILED/DEAD job)
 package api
 
 import (
@@ -22,33 +20,31 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
 	rdb *redis.Client
 	cfg *config.Config
 }
 
-type enqueueRequest struct { // JSON body for POST /jobs.
+type enqueueRequest struct { // JSON body.
 	Name       string          `json:"name"`
 	Priority   int             `json:"priority"`
 	Payload    json.RawMessage `json:"payload"`
 	MaxRetries *int            `json:"max_retries"` // pointer so we can distinguish 0 vs not-set
 }
 
-type scheduleRequest struct { //JSON body for POST /jobs/schedule, same to enqueuerequest with  an additional run_at field.
+type scheduleRequest struct { //same to enqueuerequest with  an additional run_at field.
 	enqueueRequest
-	RunAt string `json:"run_at"` // ISO 8601: "2026-06-20T10:00:00Z"
+	RunAt string `json:"run_at"` //"2026-06-20T10:00:00Z"
 }
 
-type jobResponse struct { //JSON body returned after creating a job.
+type jobResponse struct {
 	JobID  string `json:"job_id"`
 	Status string `json:"status"`
 	RunAt  string `json:"run_at,omitempty"` // only set for scheduled jobs
 }
 
-// handleEnqueue handles POST /jobs--->Creates an immediate job and pushes it to the correct priority queue.
-// Request:  {"name": "send_email", "priority": 1, "payload": {"to": "a@b.com"}}
-// Response: 202 {"job_id": "...", "status": "QUEUED"}
+// Creates job , pushes  to  correct priority queue.
+// Request:  {"name": "send_email", "priority": 1, "payload": {"to": "a@b.com"}} & Response: 202 {"job_id": "...", "status": "QUEUED"}
 func (h *Handler) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	var req enqueueRequest
 	if !decodeBody(w, r, &req) { //req now containt the json-parsed data.
@@ -69,9 +65,7 @@ func (h *Handler) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 
 	id, err := queue.Enqueue(r.Context(), h.rdb, j, h.cfg.MaxRetriesDefault)
 	if err != nil {
-		// Enqueue returns a validation error (bad input) or a Redis error (internal).
-		// We distinguish by checking the error message prefix set by validateJob.
-		// A cleaner approach (custom error types) is left as a future improvement.
+
 		slog.Error("enqueue_failed", "error", err, "request_id", getRequestID(r.Context()))
 
 		// If it starts with "enqueue validation:" it's a 400, otherwise 500.
@@ -86,9 +80,8 @@ func (h *Handler) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, jobResponse{JobID: id, Status: string(job.StatusQueued)})
 }
 
-// handleSchedule handles POST /jobs/schedule---> Creates a future-scheduled job pushed to the sorted set.
-// Request:  {"name": "generate_report", "priority": 2, "payload": {}, "run_at": "2026-06-20T10:00:00Z"}
-// Response: 202 {"job_id": "...", "status": "SCHEDULED", "run_at": "2026-06-20T10:00:00Z"}
+// Creates scheduled job & pushed to the sorted set.
+// Request:  {"name": "generate_report", "priority": 2, "payload": {}, "run_at": "2026-06-20T10:00:00Z"} & Response: 202 {"job_id": "...", "status": "SCHEDULED", "run_at": "2026-06-20T10:00:00Z"}
 func (h *Handler) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	var req scheduleRequest
 	if !decodeBody(w, r, &req) {
@@ -100,7 +93,7 @@ func (h *Handler) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse the ISO 8601 timestamp.
+	// Parse timestamp.
 	runAt, err := time.Parse(time.RFC3339, req.RunAt) //time.RFC3339  just a constant string: "2006-01-02T15:04:05Z07:00"
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_run_at", "run_at must be an RFC3339 timestamp (e.g. 2026-06-20T10:00:00Z)", "run_at")
@@ -138,7 +131,7 @@ func (h *Handler) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGetJob handles GET /jobs/{id}---> Returns the full job metadata as JSON.
+// Returns full job metadata as JSON.
 // Response: 200 {full job struct} , 404 if job does not exist
 func (h *Handler) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -168,7 +161,7 @@ func (h *Handler) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, j)
 }
 
-// handles GET /jobs/{id}/history--->Returns the list of status-change events for a job (chronological order).
+// Returns the list of status-change events for a job (chronological order).
 // Response: 200 [{"from":"QUEUED","to":"IN_PROGRESS","at":1718780000,"worker_id":"..."}],  404 if job does not exist
 func (h *Handler) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -176,7 +169,6 @@ func (h *Handler) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "job id is required", "id")
 		return
 	}
-
 	// First check the job exists.
 	exists, err := h.rdb.Exists(r.Context(), queue.MetaKey(id)).Result()
 	if err != nil {
@@ -189,7 +181,7 @@ func (h *Handler) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// LRANGE 0 -1 returns all elements in the list (oldest to newest = chronological). QUEUED-->IN_PROGRESS-->FAILED--->COMPLETED--->DEAD--->RETRIED-->RETRY_FAILED
+	//returns all elements in  list (oldest to newest = chronological). QUEUED-->IN_PROGRESS-->FAILED--->COMPLETED--->DEAD--->RETRIED-->RETRY_FAILED
 	events, err := h.rdb.LRange(r.Context(), queue.HistoryKey(id), 0, -1).Result()
 	if err != nil {
 		slog.Error("get_history_lrange_failed", "job_id", id, "error", err)
@@ -197,8 +189,7 @@ func (h *Handler) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Each element is a raw JSON string. Parse them into a slice of interface{} so
-	// the response is a proper JSON array of objects,& not an array of strings.
+	// convert elements(raw JSON string) ->JSON array of objects, not strings.
 	parsed := make([]json.RawMessage, len(events))
 	for i, e := range events {
 		parsed[i] = json.RawMessage(e)
@@ -207,8 +198,7 @@ func (h *Handler) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, parsed)
 }
 
-// handleRetry handles POST /jobs/{id}/retry
-// Re-enqueues a FAILED or DEAD job, resetting its retry count.
+// Re-enqueues FAILED or DEAD job & resetting its retry count.
 // Response: 202 {"job_id": "...", "status": "QUEUED"}, 404 if job does not exist, 409 Conflict if job is not in FAILED or DEAD state
 func (h *Handler) handleRetry(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -242,14 +232,12 @@ func (h *Handler) handleRetry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reset retry count and re-enqueue as an immediate job.
-	// We do NOT call queue.Enqueue (which assigns a new ID). Instead we use a pipeline to update the existing job in place.
+	// DON'T call queue.Enqueue (which assigns a new ID). Instead we use pipeline to update the existing job in place.
 	pipe := h.rdb.TxPipeline()
-	pipe.HSet(r.Context(), queue.MetaKey(id),
-		"status", string(job.StatusQueued),
-		"retry_count", 0,
-		"last_error", "",
-	)
+
+	pipe.HSet(r.Context(), queue.MetaKey(id), "status", string(job.StatusQueued), "retry_count", 0, "last_error", "")
 	pipe.RPush(r.Context(), queue.QueueKey(j.Priority), id)
+
 	if _, err := pipe.Exec(r.Context()); err != nil {
 		slog.Error("retry_pipeline_failed", "job_id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "failed to retry job", "")

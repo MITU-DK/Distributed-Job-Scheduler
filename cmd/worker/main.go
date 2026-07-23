@@ -1,9 +1,7 @@
-// cmd/worker/main.go — Worker process entry point.
-//
 // Responsibilities:
-//  1. Load configuration from environment variables & Connect to Redis.
-//  2. Build the executor registry (maps job names → executor implementations).
-//  3. Start the worker pool (dequeue → execute → ack/fail + heartbeat).
+//  1. Load configuration & Connect to Redis.
+//  2. Build the executor registry (maps job names -> executor implementations).
+//  3. Start the worker pool (dequeue -> execute -> ack/fail + heartbeat).
 //  4. Start the scheduler (moves scheduled + retry jobs into the active queues).
 //  5. Start the recovery scanner (rescues jobs from crashed workers).
 //  6. Listen for SIGTERM / SIGINT and trigger graceful shutdown.
@@ -23,20 +21,15 @@ import (
 )
 
 func main() {
-	// Structured JSON logging
-	// All logs are JSON so they can be ingested by log aggregators (Datadog, CloudWatch) without custom parsing.
-	// slog is the standard library structured logger (Go 1.21+).
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	//Configuration-->Fail-fast: if any required env var is missing or invalid, exit now.
-	// A misconfigured worker connecting to the wrong Redis is worse than no worker.
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("config_load_failed", "error", err)
 		os.Exit(1)
 	}
-	//Redis connection
-	rdb, err := store.NewClient(cfg)
+
+	rdb, err := store.NewRedisClient(cfg)
 	if err != nil {
 		slog.Error("redis_connect_failed", "error", err)
 		os.Exit(1)
@@ -45,52 +38,39 @@ func main() {
 
 	slog.Info("worker_starting", "worker_id", cfg.WorkerID, "concurrency", cfg.WorkerConcurrency, "redis_addr", cfg.RedisAddr)
 
-	// Executor registry---> Register one executor per job type (job.Name maps to executor).
-	// Adding a new job type in the future = register one line here.
-	// The pool is completely unaware of what these executors do.
+	// Executor registry---> Register one executor per job type (job Name maps to executor).
 	registry := worker.NewRegistry()
 	registry.Register("email", &worker.EmailExecutor{})
 	registry.Register("backup", &worker.BackupExecutor{})
 	registry.Register("cleanup", &worker.CleanupExecutor{})
 	registry.Register("sleep", &worker.SleepExecutor{})
 
-	// FailingExecutor is only registered when ENABLE_FAILING_EXECUTOR=true.
-	// This keeps the fault-tolerance test executor completely out of production.
+	// Register FailingExecutor
 	if os.Getenv("ENABLE_FAILING_EXECUTOR") == "true" {
-		slog.Warn("failing_executor_enabled", "note", "for testing only — DO NOT USE IN PRODUCTION")
+		slog.Warn("failing_executor_enabled", "note", "for testing only")
 		registry.Register("failing", &worker.FailingExecutor{Message: "injected test failure"})
 	}
 
-	// Graceful shutdown context
-	// ctx is passed down into the pool, every worker goroutine, and the heartbeat.
-	// When SIGTERM arrives, cancel() is called, and ctx.Done() fires everywhere.
-	// Every goroutine that respects ctx will stop cleanly.
+	// Graceful shutdown context passed to worker goroutine and heartbeat
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Signal handler
-	// SIGTERM is sent by Docker / Kubernetes when stopping a container.
-	// SIGINT is sent when you press Ctrl+C locally.
-	// Using a buffered channel (size 1) so the OS can deliver the signal even if
-	// our goroutine hasn't reached the <-sigCh line yet.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	pool := worker.New(rdb, cfg, registry)
 
-	// Scheduler
-	// Runs every SchedulerIntervalMs (default 1s).
-	// Moves jobs from jobs:scheduled and jobs:retry into the active priority queues.
-	// Fire-and-forget: it respects ctx so it stops cleanly on SIGTERM.
+	// Scheduler Run every SchedulerIntervalMs (default 1s).
 	scheduler := worker.NewScheduler(rdb, cfg)
-	go scheduler.Run(ctx)
-
-	// Recovery Scanner
-	// Runs every RecoveryIntervalSeconds (default 60s).
-	// Detects dead workers (missing heartbeat key) and re-enqueues their abandoned jobs.
-	// Fire-and-forget: it also respects ctx.
+	go func() {
+		scheduler.Run(ctx)
+	}()
+	// Recovery Scanner Runs every RecoveryIntervalSeconds (default 60s).
 	recovery := worker.NewRecoveryScanner(rdb, cfg)
-	go recovery.Run(ctx)
+	go func() {
+		recovery.Run(ctx)
+	}()
 
 	// Run() is called in a separate goroutine because it blocks until all workers finish draining.
 	// We need to be able to receive the signal concurrently.
@@ -104,12 +84,10 @@ func main() {
 	sig := <-sigCh
 	slog.Info("worker_shutdown_signal", "signal", sig.String())
 
-	//Cancel the context tells the pool, all worker goroutines, and the heartbeat to stop accepting new work
-	//and exit as soon as their current operation finishes.
+	//tells the pool,worker goroutines,heartbeat to stop accepting new work and exit as soon as their current operation finishes.
 	cancel()
 
 	// Wait for pool to fully drain with a hard timeout.
-	// If workers don't finish within the timeout, we exit anyway (better a slightly dirty shutdown than a container that won't stop).
 	timeout := time.Duration(cfg.GracefulShutdownTimeoutSeconds) * time.Second
 	select {
 	case <-done:
