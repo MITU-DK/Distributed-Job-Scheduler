@@ -1,5 +1,3 @@
-// A job can be enqueued as immediate (goes to a priority queue list)
-// or scheduled (goes to the sorted set and is moved to the queue when its time comes).
 package queue
 
 import (
@@ -14,51 +12,32 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Enqueue validates the job, assigns system fields, then writes it to Redis.
+// validates the job, assigns system fields(like uuid,etc for job), then writes it to Redis.
 // For immediate jobs: stores metadata + pushes ID to priority queue (MULTI/EXEC).
 // For scheduled jobs: stores metadata + adds ID to sorted set (MULTI/EXEC).
-
-// Why MULTI/EXEC (transaction) here?
-//
-//	If the process crashes after HSET but before RPUSH, the metadata exists
-//	but no worker will ever find the job (it's not in any queue).
-//
-// This orphaned job is never processed. MULTI/EXEC ensures both commands succeed or neither does.
-//
-//	IMPORTANT LIMITATION: Redis MULTI/EXEC is not a true ACID transaction.
-//	If HSET succeeds but RPUSH fails due to a type error, HSET is NOT rolled back.
-//	MULTI/EXEC guarantees atomic execution, NOT rollback.
-//	Mitigation: validate key types at startup (done in store/redis.go Ping check).
-
+// (MULTI/EXEC).( ensures both commands succeed or neither does. but if one command fails, the other will not be rolled back. so must validate before writing to redis.)
 func Enqueue(ctx context.Context, rdb *redis.Client, j *job.Job, defaultMaxRetries int) (string, error) {
 	// 1. Validate
 	if err := validateJob(j); err != nil {
 		return "", fmt.Errorf("enqueue validation: %w", err)
 	}
-
-	// 2. Apply MaxRetries default
 	if j.MaxRetries == 0 {
-		j.MaxRetries = defaultMaxRetries
+		j.MaxRetries = defaultMaxRetries // 2. Apply MaxRetries default
 	}
 
-	// 3. Assign system fields
-	j.ID = uuid.New().String()
+	j.ID = uuid.New().String() // 3. Assign job id
 	j.RetryCount = 0
 	j.EnqueuedAt = time.Now().Unix()
+	now := time.Now().Unix() // 4. Decide: immediate or scheduled
 
-	// 4. Decide: immediate or scheduled
-	now := time.Now().Unix()
-
-	if j.ScheduledAt > 0 && j.ScheduledAt > now {
-		// Future job → scheduled set
+	if j.ScheduledAt > 0 && j.ScheduledAt > now { // Future job -> scheduled set
 		j.Status = job.StatusScheduled
 		if err := enqueueScheduled(ctx, rdb, j); err != nil {
 			return "", err
 		}
 		slog.Info("job_scheduled", "job_id", j.ID, "run_at", j.ScheduledAt)
 	} else {
-		// Immediate (or past scheduled_at → treat as immediate)
-		if j.ScheduledAt > 0 && j.ScheduledAt <= now {
+		if j.ScheduledAt > 0 && j.ScheduledAt <= now { // Immediate (or past scheduled_at -> treat as immediate)
 			slog.Warn("scheduled_at_in_past_treating_as_immediate", "job_id", j.ID, "scheduled_at", j.ScheduledAt)
 			j.ScheduledAt = 0
 		}
@@ -66,24 +45,24 @@ func Enqueue(ctx context.Context, rdb *redis.Client, j *job.Job, defaultMaxRetri
 		if err := enqueueImmediate(ctx, rdb, j); err != nil {
 			return "", err
 		}
-		slog.Info("job_enqueued", "job_id", j.ID, "priority", j.Priority, "queue", queueKey(j.Priority))
+		slog.Info("job_enqueued", "job_id", j.ID, "priority", j.Priority, "queue", QueueKey(j.Priority))
 	}
 
 	return j.ID, nil
 }
 
-// enqueueImmediate writes metadata and pushes the job ID to the correct priority queue.
+// writes metadata and pushes the job ID to the correct priority queue.
 func enqueueImmediate(ctx context.Context, rdb *redis.Client, j *job.Job) error {
 	pipe := rdb.TxPipeline() // MULTI/EXEC
 	pipe.HSet(ctx, MetaKey(j.ID), job.ToHash(j))
-	pipe.RPush(ctx, queueKey(j.Priority), j.ID)
+	pipe.RPush(ctx, QueueKey(j.Priority), j.ID)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("enqueue immediate (job %s): %w", j.ID, err)
 	}
 	return nil
 }
 
-// enqueueScheduled writes metadata and adds the job ID to the scheduled sorted set.
+// writes metadata and adds the job ID to the scheduled sorted set.
 func enqueueScheduled(ctx context.Context, rdb *redis.Client, j *job.Job) error {
 	pipe := rdb.TxPipeline() // MULTI/EXEC
 	pipe.HSet(ctx, MetaKey(j.ID), job.ToHash(j))
@@ -97,23 +76,7 @@ func enqueueScheduled(ctx context.Context, rdb *redis.Client, j *job.Job) error 
 	return nil
 }
 
-// queueKey maps a priority integer to the correct Redis list key.
-// Priority 1 = highest = jobs:queue:p1.
-func queueKey(priority int) string {
-	switch priority {
-	case 1:
-		return QueueP1
-	case 2:
-		return QueueP2
-	case 3:
-		return QueueP3
-	default:
-		return QueueP2 // should never reach here after validation
-	}
-}
-
-// validateJob checks all fields before any Redis writes happen.
-// Fail-fast: do not touch Redis if the input is garbage.
+// checks all fields before any Redis writes happen. Fail-fast: do not touch Redis if the input is garbage.
 func validateJob(j *job.Job) error {
 	if j.Name == "" {
 		return fmt.Errorf("name is required")

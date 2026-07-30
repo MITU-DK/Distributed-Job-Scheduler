@@ -1,4 +1,4 @@
-// cmd/loadtest/main.go---->A dedicated script for measuring worker throughput (Jobs Per Second).
+//dedicated script for measuring worker throughput (Jobs Per Second).
 //
 // Usage: go run cmd/loadtest/main.go --count=1000
 //	or WORKER_CONCURRENCY=50 go run cmd/worker/main.go
@@ -46,7 +46,7 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	fmt.Println("🚀 Starting Phase 8 Load Test...")
+	fmt.Println("🚀 Starting Load Test...")
 	fmt.Printf("🎯 Target: %d jobs using the 'sleep' executor (100ms fixed duration each)\n", count)
 
 	// 1. Flush Redis
@@ -70,11 +70,11 @@ func main() {
 	var wg sync.WaitGroup
 	jobChan := make(chan struct{}, count)
 	for i := 0; i < count; i++ {
-		jobChan <- struct{}{} ///an object that takes exactly 0 bytes of computer memory
+		jobChan <- struct{}{}
 	}
 	close(jobChan)
 
-	// Use 50 concurrent goroutines to enqueue jobs  fast.
+	// 50 concurrent goroutines to enqueue jobs  fast.
 	concurrency := 50
 	var successCount int32
 

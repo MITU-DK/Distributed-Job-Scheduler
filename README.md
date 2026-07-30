@@ -80,8 +80,8 @@ Every worker writes `SET workers:heartbeat:{worker_id} {timestamp} EX 30` every 
 ### 4. Strict Priority Queue + Documented Starvation Trade-off
 We always check `p3 → p2 → p1` (highest first). This is the simplest correct implementation. The known trade-off is starvation: if P3 is always full, P1 jobs will never run. In production, this would be solved with weighted random selection or job aging. The trade-off is explicitly documented rather than hidden.
 
-### 5. Scheduler Atomicity Problem (Documented Limitation)
-The scheduler loop reads `ZRANGEBYSCORE` then `ZREM`. These two commands are **not atomic**. In a multi-instance API deployment, two scheduler instances could promote the same scheduled job into the queue twice. The fix is a Redis Lua script that combines both commands into a single atomic operation. This limitation is documented here so it can be addressed before deploying multiple API instances.
+### 5. Atomic Scheduler Promotion
+The scheduler reads ready jobs from the sorted set, then uses a Redis Lua script to atomically claim each job with `ZREM` before pushing it into the priority queue. If multiple scheduler instances see the same job, only the instance whose `ZREM` succeeds promotes it, preventing duplicate queue entries.
 
 ---
 
@@ -290,19 +290,16 @@ Returns paginated list of dead-letter jobs with full metadata (name, error, time
 
 ## Known Limitations
 
-1. **Scheduler race condition in multi-instance deployments.** Running two API servers simultaneously can result in the same scheduled job being promoted into the queue twice. Fix: wrap the `ZRANGEBYSCORE + ZREM` into a single Redis Lua script.
+1. **Strict priority can starve low-priority jobs.** If P3 is always full, P1 jobs never run. Fix: implement weighted random selection or timestamp-based aging.
 
-2. **Strict priority can starve low-priority jobs.** If P3 is always full, P1 jobs never run. Fix: implement weighted random selection or timestamp-based aging.
+2. **No exactly-once delivery.** The system guarantees at-least-once. If a worker crashes immediately after completing a job but before removing it from `inprogress`, the job will be run a second time. Fix: idempotency keys stored in the `jobs:meta:{id}` hash.
 
-3. **No exactly-once delivery.** The system guarantees at-least-once. If a worker crashes immediately after completing a job but before removing it from `inprogress`, the job will be run a second time. Fix: idempotency keys stored in the `jobs:meta:{id}` hash.
-
-4. **Single Redis instance.** All state lives in one Redis. Fix: Redis Cluster or a Redis Sentinel setup for high availability.
+3. **Single Redis instance.** All state lives in one Redis. Fix: Redis Cluster or a Redis Sentinel setup for high availability.
 
 ---
 
 ## What I Would Do Next
 
-- [ ] Redis Lua script to fix the scheduler race condition
 - [ ] Prometheus metrics exporter (`/metrics` in Prometheus text format)
 - [ ] Job dependency graph (Job B runs only after Job A completes)
 - [ ] Redis Cluster support for horizontal Redis scaling

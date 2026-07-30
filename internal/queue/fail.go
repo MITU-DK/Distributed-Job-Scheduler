@@ -1,7 +1,7 @@
 // FailJob flow:
-//  1. Remove the job ID from the worker's in-progress list (LREM, by value).
+//  1. Remove job ID from  worker's in-progress list (LREM, by value).
 //  2. If retries remain: schedules a retry via ZADD jobs:retry (exponential backoff + jitter).
-//  3. If retries exhausted: marks the job DEAD and pushes it to the dead-letter queue.
+//  3. If exhausted: marks  job DEAD and pushes it to  dead-letter queue.
 package queue
 
 import (
@@ -16,41 +16,14 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Two outcomes based on retry budget:
-//
-//	A. Retries remain (j.RetryCount < j.MaxRetries):
-//	   - Update metadata: status=FAILED, retry_count incremented, last_error recorded.
-//	   - Append history event.
-//	   - Schedule retry via ZADD jobs:retry {retryAt} {jobID}.
-//	     retryAt = now + exponentialBackoff + jitter
-//
-//	B. Retries exhausted (j.RetryCount >= j.MaxRetries):
-//	   - Update metadata: status=DEAD, last_error recorded.
-//	   - Append history event.
-//	   - RPUSH jobs:dead {jobID}   (dead-letter queue for operator inspection).
-//	   - Set 7-day TTL on meta and history.
-//
-// Exponential backoff formula: delay = retryBaseDelaySeconds * 2^RetryCount
-//
-//	jitter = random 0-4 seconds (uniform)
-//	retryAt = now + delay + jitter
-//
-// Why jitter is critical (thundering herd prevention):
-//
-//	Without jitter: 1000 jobs fail simultaneously. All scheduled to retry at T+10.
-//	At T+10, all 1000 hit Redis at once → Redis becomes bottleneck → cascade failure.
-//	With jitter (0–4s): retries spread across T+10 to T+14 → Redis handles them smoothly.
 func FailJob(ctx context.Context, rdb *redis.Client, j *job.Job, workerID string, execErr error, retryBaseDelaySeconds int) error {
 	now := time.Now().Unix()
 	errMsg := execErr.Error()
 
 	// 1. Remove from in-progress list.
 	if _, err := rdb.LRem(ctx, InProgressKey(workerID), 1, j.ID).Result(); err != nil {
-		slog.Warn("fail_lrem_failed",
-			"job_id", j.ID,
-			"worker_id", workerID,
-			"error", err,
-		)
+
+		slog.Warn("fail_lrem_failed", "job_id", j.ID, "worker_id", workerID, "error", err)
 	}
 
 	if j.RetryCount < j.MaxRetries {
@@ -75,38 +48,32 @@ func scheduleRetry(ctx context.Context, rdb *redis.Client, j *job.Job, workerID,
 	}
 	eventJSON, _ := json.Marshal(event)
 
-	// scriptScheduleRetry atomically:
-	//   1. LREM  inprogress list    — remove the job from the worker's in-progress list
-	//   2. HSET  metadata hash      — status=FAILED, retry_count++, last_error
-	//   3. RPUSH history list       — append status-transition event
-	//   4. INCR  metrics:jobs:failed
-	//   5. ZADD  jobs:retry score   — schedule retry at retryAt timestamp
-	// All 5 steps in ONE Redis operation. Crash-safe.
+	// remove job from  worker's in-progress list
+	// status=FAILED, retry_count++, last_error
+	// append status-transition event
+	//  metrics:jobs:failed
+	// schedule retry at retryAt timestamp
+
 	if err := scriptScheduleRetry.Run(ctx, rdb,
 		[]string{
-			InProgressKey(workerID), // KEYS[1]
-			MetaKey(j.ID),           // KEYS[2]
-			HistoryKey(j.ID),        // KEYS[3]
-			KeyRetry,                // KEYS[4]
-			KeyMetricFailed,         // KEYS[5]
+			InProgressKey(workerID),
+			MetaKey(j.ID),
+			HistoryKey(j.ID),
+			KeyRetry,
+			KeyMetricFailed,
 		},
-		j.ID,                          // ARGV[1]
-		string(eventJSON),             // ARGV[2]
-		newRetryCount,                 // ARGV[3]
-		errMsg,                        // ARGV[4]
-		retryAt,                       // ARGV[5] score for ZADD
+		j.ID,
+		string(eventJSON),
+		newRetryCount,
+		errMsg,
+		retryAt, // score for ZADD
 	).Err(); err != nil {
 		slog.Error("fail_retry_script_failed", "job_id", j.ID, "error", err)
 		return fmt.Errorf("fail retry script for job %s: %w", j.ID, err)
 	}
 
 	slog.Info("job_failed_scheduled_retry",
-		"job_id", j.ID,
-		"worker_id", workerID,
-		"retry_count", newRetryCount,
-		"max_retries", j.MaxRetries,
-		"retry_at", retryAt,
-		"error", errMsg,
+		"job_id", j.ID, "worker_id", workerID, "retry_count", newRetryCount, "max_retries", j.MaxRetries, "retry_at", retryAt, "error", errMsg,
 	)
 	return nil
 }
@@ -123,38 +90,30 @@ func moveToDead(ctx context.Context, rdb *redis.Client, j *job.Job, workerID, er
 
 	const ttlSeconds = 7 * 24 * 60 * 60 // 604800
 
-	// scriptMoveToDead atomically:
-	//   1. LREM  inprogress list    — remove the job from the worker's in-progress list
-	//   2. HSET  metadata hash      — status=DEAD, last_error
-	//   3. RPUSH jobs:dead          — push to dead-letter queue for operator inspection
-	//   4. RPUSH history list       — append status-transition event
-	//   5. INCR  metrics:jobs:dead
-	//   6. EXPIRE metadata  604800  — 7-day TTL
-	//   7. EXPIRE history   604800  — 7-day TTL
+	//remove  job from  worker's in-progress list
+	// status=DEAD, last_error
+	// push to dead-letter queue for operator inspection
+	//  append status-transition event
+	// INCR  metrics:jobs:dead
+	// EXPIRE metadata & history 604800  — 7-day TTL
 	if err := scriptMoveToDead.Run(ctx, rdb,
 		[]string{
-			InProgressKey(workerID), // KEYS[1]
-			MetaKey(j.ID),           // KEYS[2]
-			KeyDead,                 // KEYS[3]
-			HistoryKey(j.ID),        // KEYS[4]
-			KeyMetricDead,           // KEYS[5]
+			InProgressKey(workerID),
+			MetaKey(j.ID),
+			KeyDead,
+			HistoryKey(j.ID),
+			KeyMetricDead,
 		},
-		j.ID,              // ARGV[1]
-		string(eventJSON), // ARGV[2]
-		errMsg,            // ARGV[3]
-		ttlSeconds,        // ARGV[4] TTL
+		j.ID,
+		string(eventJSON),
+		errMsg,
+		ttlSeconds, //TTL
 	).Err(); err != nil {
 		slog.Error("fail_dead_script_failed", "job_id", j.ID, "error", err)
 		return fmt.Errorf("dead script for job %s: %w", j.ID, err)
 	}
 
-	slog.Warn("job_dead",
-		"job_id", j.ID,
-		"worker_id", workerID,
-		"retry_count", j.RetryCount,
-		"max_retries", j.MaxRetries,
-		"error", errMsg,
-	)
+	slog.Warn("job_dead", "job_id", j.ID, "worker_id", workerID, "retry_count", j.RetryCount, "max_retries", j.MaxRetries, "error", errMsg)
 	return nil
-}
 
+}

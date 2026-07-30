@@ -72,7 +72,7 @@ func main() {
 		recovery.Run(ctx)
 	}()
 
-	// Run() is called in a separate goroutine because it blocks until all workers finish draining.
+	// Run() called in a separate goroutine becoz it blocks until all workers finish draining.
 	// We need to be able to receive the signal concurrently.
 	done := make(chan struct{})
 	go func() {
