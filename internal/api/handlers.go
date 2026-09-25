@@ -237,6 +237,8 @@ func (h *Handler) handleRetry(w http.ResponseWriter, r *http.Request) {
 
 	pipe.HSet(r.Context(), queue.MetaKey(id), "status", string(job.StatusQueued), "retry_count", 0, "last_error", "")
 	pipe.RPush(r.Context(), queue.QueueKey(j.Priority), id)
+	pipe.LRem(r.Context(), queue.KeyDead, 0, id)   // remove ghost from dead-letter list
+	pipe.ZRem(r.Context(), queue.KeyRetry, id)      // remove ghost from retry sorted set
 
 	if _, err := pipe.Exec(r.Context()); err != nil {
 		slog.Error("retry_pipeline_failed", "job_id", id, "error", err)
