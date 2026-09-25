@@ -78,7 +78,7 @@ Without jitter: 1,000 jobs that all fail at the same moment will all retry at th
 Every worker writes `SET workers:heartbeat:{worker_id} {timestamp} EX 30` every 10 seconds. If a worker process is killed (SIGKILL, OOM), the key expires in at most 30 seconds. The Recovery Scanner goroutine, which runs every 60 seconds, scans for missing heartbeat keys. For any dead worker, it moves all jobs from that worker's `inprogress` list back to the appropriate priority queue.
 
 ### 4. Strict Priority Queue + Documented Starvation Trade-off
-We always check `p3 → p2 → p1` (highest first). This is the simplest correct implementation. The known trade-off is starvation: if P3 is always full, P1 jobs will never run. In production, this would be solved with weighted random selection or job aging. The trade-off is explicitly documented rather than hidden.
+We always check `p1 → p2 → p3` (highest first). This is the simplest correct implementation. The known trade-off is starvation: if P1 is always full, P3 jobs never run. In production, this would be solved with weighted random selection or job aging. The trade-off is explicitly documented rather than hidden.
 
 ### 5. Atomic Scheduler Promotion
 The scheduler reads ready jobs from the sorted set, then uses a Redis Lua script to atomically claim each job with `ZREM` before pushing it into the priority queue. If multiple scheduler instances see the same job, only the instance whose `ZREM` succeeds promotes it, preventing duplicate queue entries.
