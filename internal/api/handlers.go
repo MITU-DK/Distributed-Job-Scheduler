@@ -63,7 +63,7 @@ func (h *Handler) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		MaxRetries: maxRetries,
 	}
 
-	id, err := queue.Enqueue(r.Context(), h.rdb, j, h.cfg.MaxRetriesDefault)
+	id, err := queue.Enqueue(r.Context(), h.rdb, j)
 	if err != nil {
 
 		slog.Error("enqueue_failed", "error", err, "request_id", getRequestID(r.Context()))
@@ -113,7 +113,7 @@ func (h *Handler) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		ScheduledAt: runAt.Unix(),
 	}
 
-	id, err := queue.Enqueue(r.Context(), h.rdb, j, h.cfg.MaxRetriesDefault)
+	id, err := queue.Enqueue(r.Context(), h.rdb, j)
 	if err != nil {
 		slog.Error("schedule_enqueue_failed", "error", err, "request_id", getRequestID(r.Context()))
 		if isValidationError(err) {

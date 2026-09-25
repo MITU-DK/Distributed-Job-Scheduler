@@ -16,14 +16,13 @@ import (
 // For immediate jobs: stores metadata + pushes ID to priority queue (MULTI/EXEC).
 // For scheduled jobs: stores metadata + adds ID to sorted set (MULTI/EXEC).
 // (MULTI/EXEC).( ensures both commands succeed or neither does. but if one command fails, the other will not be rolled back. so must validate before writing to redis.)
-func Enqueue(ctx context.Context, rdb *redis.Client, j *job.Job, defaultMaxRetries int) (string, error) {
+func Enqueue(ctx context.Context, rdb *redis.Client, j *job.Job) (string, error) {
 	// 1. Validate
 	if err := validateJob(j); err != nil {
 		return "", fmt.Errorf("enqueue validation: %w", err)
 	}
-	if j.MaxRetries == 0 {
-		j.MaxRetries = defaultMaxRetries // 2. Apply MaxRetries default
-	}
+	// MaxRetries is set by the caller (handler applies the default when not specified).
+	// Do not override here — a value of 0 means "never retry" and must be preserved.
 
 	j.ID = uuid.New().String() // 3. Assign job id
 	j.RetryCount = 0
