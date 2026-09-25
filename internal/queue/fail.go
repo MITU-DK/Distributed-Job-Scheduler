@@ -1,7 +1,7 @@
 // FailJob flow:
-//  1. Remove job ID from  worker's in-progress list (LREM, by value).
-//  2. If retries remain: schedules a retry via ZADD jobs:retry (exponential backoff + jitter).
-//  3. If exhausted: marks  job DEAD and pushes it to  dead-letter queue.
+//  1. If retries remain: scheduleRetry atomically removes from inprogress, marks FAILED, and ZADDs to jobs:retry (via Lua).
+//  2. If exhausted: moveToDead atomically removes from inprogress, marks DEAD, and pushes to jobs:dead (via Lua).
+//  LREM from the inprogress list is performed atomically inside each Lua script — not as a separate step.
 package queue
 
 import (
@@ -20,12 +20,11 @@ func FailJob(ctx context.Context, rdb *redis.Client, j *job.Job, workerID string
 	now := time.Now().Unix()
 	errMsg := execErr.Error()
 
-	// 1. Remove from in-progress list.
-	if _, err := rdb.LRem(ctx, InProgressKey(workerID), 1, j.ID).Result(); err != nil {
-
-		slog.Warn("fail_lrem_failed", "job_id", j.ID, "worker_id", workerID, "error", err)
-	}
-
+	// Do NOT call LREM here. Both scriptScheduleRetry and scriptMoveToDead already
+	// execute LREM as their first atomic operation (KEYS[1] = InProgressKey).
+	// A standalone LREM here would create a crash window: if this process dies after
+	// the LREM but before the Lua script runs, the job is removed from inprogress
+	// without being added to jobs:retry or jobs:dead — permanently lost.
 	if j.RetryCount < j.MaxRetries {
 		return scheduleRetry(ctx, rdb, j, workerID, errMsg, now, retryBaseDelaySeconds)
 	}
