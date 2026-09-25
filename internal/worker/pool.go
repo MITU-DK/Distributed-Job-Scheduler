@@ -105,26 +105,23 @@ func (p *Pool) runWorker(ctx context.Context, workerNum int) {
 		execErr := executor.Execute(ctx, j)
 
 		ackCtx, ackCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer ackCancel()
 
 		if execErr == nil {
 			if err := queue.CompleteJob(ackCtx, p.rdb, j, p.cfg.WorkerID); err != nil {
 				slog.Error("worker_complete_job_error", "job_id", j.ID, "error", err)
 			}
 		} else {
-			if ctx.Err() != nil { //SIGTERM interrupted Execute — executor returned early.job still in the inprogress list — recovery will re-enqueue it automatically.
-				slog.Info("worker_job_interrupted_by_shutdown", "job_id", j.ID, "worker_id", p.cfg.WorkerID,
-					"note", "job remains in inprogress list; recovery will re-enqueue",
-				)
+			if ctx.Err() != nil { // SIGTERM interrupted — job stays in inprogress; recovery will re-enqueue.
+				slog.Info("worker_job_interrupted_by_shutdown", "job_id", j.ID, "worker_id", p.cfg.WorkerID)
+				ackCancel()
 				return
 			}
 			slog.Warn("worker_job_failed", "job_id", j.ID, "job_name", j.Name, "worker_id", p.cfg.WorkerID, "error", execErr)
-
-			// Fail the job — use ackCtx (detached) so this write succeeds even during shutdown.
 			if err := queue.FailJob(ackCtx, p.rdb, j, p.cfg.WorkerID, execErr, p.cfg.RetryBaseDelaySeconds); err != nil {
 				slog.Error("worker_fail_job_error", "job_id", j.ID, "error", err)
 			}
 		}
+		ackCancel() // must be a direct call, not defer — defer accumulates per job until goroutine exits
 	}
 }
 
