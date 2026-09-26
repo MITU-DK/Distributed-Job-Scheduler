@@ -87,16 +87,18 @@ The scheduler reads ready jobs from the sorted set, then uses a Redis Lua script
 
 ## Performance
 
-Load test methodology: 1,000 `"sleep"` jobs (100ms fixed duration) submitted to the queue all at once. Time measured from first job enqueued to last job's `total_processed` counter increment. Run on a single Ubuntu machine (Go + Redis on localhost).
+Load test methodology: 1,000 `"sleep"` jobs (100ms fixed duration) submitted to the queue all at once. Time measured from first job enqueued to last job's `total_processed` counter increment. Run on a single Ubuntu machine (Go + Redis on localhost). Worker binary compiled with `go build`; each run isolated with a fresh worker process.
 
 | `WORKER_CONCURRENCY` | Total Time | Throughput | vs. Baseline |
 |:---:|:---:|:---:|:---:|
-| 1 | 103.74 s | **9.64 JPS** | 1× (baseline) |
-| 50 | 2.31 s | **432.34 JPS** | **44.9× faster** |
+| 1  | 103.38 s | **9.67 JPS**   | 1× (baseline) |
+| 10 | 10.95 s  | **91.31 JPS**  | **9.4× faster** |
+| 50 | 2.05 s   | **488.96 JPS** | **50.6× faster** |
+| 100 | 1.53 s  | **655.62 JPS** | **67.8× faster** |
 
-> **Improvement ratio:** `(103.74 − 2.31) / 103.74 = 97.8%` reduction in queue drain time.
+> **Improvement ratio (w=1 → w=50):** `(103.38 − 2.05) / 103.38 = 98.0%` reduction in queue drain time.
 
-Throughput scales near-linearly because the `SleepExecutor` is pure IO-bound (no CPU contention). Goroutines are cheap — the bottleneck with 50 workers shifts to the Redis round-trip latency per `LMOVE` (~0.2ms on localhost), not CPU.
+Throughput scales near-linearly because the `SleepExecutor` is pure IO-bound (no CPU contention). Goroutines are cheap — at `w=50` the bottleneck shifts to Redis round-trip latency per `LMOVE` (~0.2ms on localhost). The `INCR metrics:jobs:processed` counter is now folded atomically into the `scriptCompleteJob` Lua script, saving one Redis round-trip per completed job and allowing higher concurrency levels to sustain throughput beyond 600 JPS.
 
 ---
 
