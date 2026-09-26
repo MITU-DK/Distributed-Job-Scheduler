@@ -37,21 +37,16 @@ func CompleteJob(ctx context.Context, rdb *redis.Client, j *job.Job, workerID st
 
 	const ttlSeconds = 7 * 24 * 60 * 60 // 604800
 
-	// Atomically: LREM inprogress + HSET COMPLETED + RPUSH history + EXPIRE (meta,history).
+	// Atomically: LREM inprogress + HSET COMPLETED + RPUSH history + EXPIRE (meta,history) + INCR processed.
 	if err := scriptCompleteJob.Run(ctx, rdb,
 		[]string{
-			InProgressKey(workerID), MetaKey(j.ID), HistoryKey(j.ID)}, //// KEYS[1],2,3
-		j.ID, string(eventJSON), // ARGV[1],2
+			InProgressKey(workerID), MetaKey(j.ID), HistoryKey(j.ID), KeyMetricProcessed}, // KEYS[1..4]
+		j.ID, string(eventJSON), // ARGV[1,2]
 		now,        // ARGV[3] completed_at
 		ttlSeconds, // ARGV[4] TTL
 	).Err(); err != nil {
 		slog.Error("complete_script_failed", "job_id", j.ID, "error", err)
 		return fmt.Errorf("complete script for job %s: %w", j.ID, err)
-	}
-
-	// Increment the processed counter separately.This is a best-effort metric — a failure here does NOT affect job correctness.
-	if err := rdb.Incr(ctx, KeyMetricProcessed).Err(); err != nil {
-		slog.Warn("complete_metric_incr_failed", "job_id", j.ID, "error", err)
 	}
 
 	slog.Info("job_completed", "job_id", j.ID, "worker_id", workerID, "completed_at", now)

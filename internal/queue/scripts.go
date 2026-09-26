@@ -18,6 +18,7 @@ redis.call('HSET',   KEYS[2], 'status', 'COMPLETED', 'completed_at', ARGV[3], 'w
 redis.call('RPUSH',  KEYS[3], ARGV[2])
 redis.call('EXPIRE', KEYS[2], ARGV[4])
 redis.call('EXPIRE', KEYS[3], ARGV[4])
+redis.call('INCR',   KEYS[4])
 return 1
 `)
 
