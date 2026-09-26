@@ -82,77 +82,94 @@ func Dequeue(ctx context.Context, rdb *redis.Client, workerID string) (*job.Job,
 	}
 }
 
-// Called by the scheduler loop. Limited to 10 per tick to avoid blocking the loop.
-// ATOMICITY: We used scriptPromoteJob (Lua) to perform ZREM + RPUSH + HSET in a single  Redis operation.
+// Called by the scheduler loop. Drains all ready retry jobs in batches of 100 per round-trip.
 func DequeueRetryReady(ctx context.Context, rdb *redis.Client) ([]string, error) {
-	now := float64(time.Now().Unix())
+	var allPromoted []string
 
-	ids, err := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{ // Fetch up to 10 job IDs whose retry time has passed.
-		Key:     KeyRetry,
-		Start:   0,
-		Stop:    now,
-		ByScore: true,
-		Count:   10,
-	}).Result()
-	if err != nil {
-		return nil, fmt.Errorf("retry dequeue zrangebyscore: %w", err)
+	for {
+		now := float64(time.Now().Unix())
+		ids, err := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+			Key:     KeyRetry,
+			Start:   0,
+			Stop:    now,
+			ByScore: true,
+			Count:   100, // 100 per round-trip; loop until 0 returned
+		}).Result()
+		if err != nil {
+			return allPromoted, fmt.Errorf("retry dequeue zrangebyscore: %w", err)
+		}
+		if len(ids) == 0 {
+			break
+		}
+
+		for _, id := range ids {
+			priority, err := rdb.HGet(ctx, MetaKey(id), "priority").Int()
+			if err != nil {
+				slog.Error("retry_priority_read_failed", "job_id", id, "error", err)
+				continue
+			}
+			result, err := scriptPromoteJob.Run(ctx, rdb, []string{KeyRetry, QueueKey(priority), MetaKey(id)}, id).Int()
+			if err != nil {
+				slog.Error("retry_promote_script_failed", "job_id", id, "error", err)
+				continue
+			}
+			if result == 0 {
+				slog.Warn("retry_promote_already_claimed", "job_id", id)
+				continue
+			}
+			allPromoted = append(allPromoted, id)
+		}
+
+		if len(ids) < 100 {
+			break // fetched fewer than a full batch — sorted set is now empty
+		}
 	}
 
-	promoted := ids[:0] // same backing array, avoids allocation
-	for _, id := range ids {
-		priority, err := rdb.HGet(ctx, MetaKey(id), "priority").Int()
-		if err != nil {
-			slog.Error("retry_priority_read_failed", "job_id", id, "error", err)
-			continue
-		}
-		result, err := scriptPromoteJob.Run(ctx, rdb, []string{KeyRetry, QueueKey(priority), MetaKey(id)}, id).Int()
-		if err != nil {
-			slog.Error("retry_promote_script_failed", "job_id", id, "error", err)
-			continue
-		}
-		if result == 0 { // Another scheduler instance already claimed this job (idempotency).
-			slog.Warn("retry_promote_already_claimed", "job_id", id)
-			continue
-		}
-		promoted = append(promoted, id)
-	}
-
-	return promoted, nil
+	return allPromoted, nil
 }
 
-// ATOMICITY: Same scriptPromoteJob Lua script as DequeueRetryReady, targeting KeyScheduled.
+// Drains all ready scheduled jobs in batches of 100 per round-trip.
 func DequeueScheduledReady(ctx context.Context, rdb *redis.Client) ([]string, error) {
-	now := float64(time.Now().Unix())
+	var allPromoted []string
 
-	ids, err := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
-		Key:     KeyScheduled,
-		Start:   0,
-		Stop:    now,
-		ByScore: true,
-		Count:   10,
-	}).Result()
-	if err != nil {
-		return nil, fmt.Errorf("scheduled dequeue zrangebyscore: %w", err)
+	for {
+		now := float64(time.Now().Unix())
+		ids, err := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+			Key:     KeyScheduled,
+			Start:   0,
+			Stop:    now,
+			ByScore: true,
+			Count:   100,
+		}).Result()
+		if err != nil {
+			return allPromoted, fmt.Errorf("scheduled dequeue zrangebyscore: %w", err)
+		}
+		if len(ids) == 0 {
+			break
+		}
+
+		for _, id := range ids {
+			priority, err := rdb.HGet(ctx, MetaKey(id), "priority").Int()
+			if err != nil {
+				slog.Error("scheduled_priority_read_failed", "job_id", id, "error", err)
+				continue
+			}
+			result, err := scriptPromoteJob.Run(ctx, rdb, []string{KeyScheduled, QueueKey(priority), MetaKey(id)}, id).Int()
+			if err != nil {
+				slog.Error("scheduled_promote_script_failed", "job_id", id, "error", err)
+				continue
+			}
+			if result == 0 {
+				slog.Warn("scheduled_promote_already_claimed", "job_id", id)
+				continue
+			}
+			allPromoted = append(allPromoted, id)
+		}
+
+		if len(ids) < 100 {
+			break
+		}
 	}
 
-	promoted := ids[:0]
-	for _, id := range ids {
-		priority, err := rdb.HGet(ctx, MetaKey(id), "priority").Int()
-		if err != nil {
-			slog.Error("scheduled_priority_read_failed", "job_id", id, "error", err)
-			continue
-		}
-		result, err := scriptPromoteJob.Run(ctx, rdb, []string{KeyScheduled, QueueKey(priority), MetaKey(id)}, id).Int()
-		if err != nil {
-			slog.Error("scheduled_promote_script_failed", "job_id", id, "error", err)
-			continue
-		}
-		if result == 0 {
-			slog.Warn("scheduled_promote_already_claimed", "job_id", id)
-			continue
-		}
-		promoted = append(promoted, id)
-	}
-
-	return promoted, nil
+	return allPromoted, nil
 }

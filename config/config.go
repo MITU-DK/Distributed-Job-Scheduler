@@ -64,7 +64,7 @@ func Load() (*Config, error) {
 		MaxRetriesDefault:     getEnvInt("MAX_RETRIES_DEFAULT", 3),
 		RetryBaseDelaySeconds: getEnvInt("RETRY_BASE_DELAY_SECONDS", 10),
 
-		SchedulerIntervalMs: getEnvInt("SCHEDULER_INTERVAL_MS", 1000),
+		SchedulerIntervalMs: getEnvInt("SCHEDULER_INTERVAL_MS", 200),
 
 		WorkerHeartbeatIntervalSeconds: getEnvInt("WORKER_HEARTBEAT_INTERVAL_SECONDS", 10),
 		WorkerHeartbeatTTLSeconds:      getEnvInt("WORKER_HEARTBEAT_TTL_SECONDS", 30),
