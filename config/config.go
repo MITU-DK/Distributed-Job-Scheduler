@@ -66,10 +66,10 @@ func Load() (*Config, error) {
 
 		SchedulerIntervalMs: getEnvInt("SCHEDULER_INTERVAL_MS", 200),
 
-		WorkerHeartbeatIntervalSeconds: getEnvInt("WORKER_HEARTBEAT_INTERVAL_SECONDS", 10),
-		WorkerHeartbeatTTLSeconds:      getEnvInt("WORKER_HEARTBEAT_TTL_SECONDS", 30),
+		WorkerHeartbeatIntervalSeconds: getEnvInt("WORKER_HEARTBEAT_INTERVAL_SECONDS", 5),
+		WorkerHeartbeatTTLSeconds:      getEnvInt("WORKER_HEARTBEAT_TTL_SECONDS", 15),
 
-		RecoveryIntervalSeconds: getEnvInt("RECOVERY_INTERVAL_SECONDS", 60),
+		RecoveryIntervalSeconds: getEnvInt("RECOVERY_INTERVAL_SECONDS", 30),
 
 		LogLevel: getEnv("LOG_LEVEL", "INFO"),
 
