@@ -12,6 +12,8 @@ services:
       retries: 5
     ports:
       - "6379:6379"
+    networks:
+      - chronos-net
 
   # API Server
   api:
@@ -29,6 +31,8 @@ services:
     ports:
       - "8080:8080"
     restart: on-failure
+    networks:
+      - chronos-net
 
   # Worker 
   worker:
@@ -43,6 +47,8 @@ services:
       # Same override as api — workers also need to reach the redis container.
       REDIS_ADDR: redis:6379
     restart: on-failure
+    networks:
+      - chronos-net
 
   # Frontend (React + NGINX) 
   frontend:
@@ -56,6 +62,12 @@ services:
     ports:
       - "3000:80"
     restart: on-failure
+    networks:
+      - chronos-net
 
 volumes:
   redis-data:
+
+networks:
+  chronos-net:
+    driver: bridge
